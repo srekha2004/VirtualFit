@@ -1,0 +1,68 @@
+import numpy as np
+import cv2
+from scipy.spatial.transform import Rotation as R
+
+class VirtualUniformMeasurement:
+    def __init__(self, calibration_file):
+        # Load calibration parameters
+        self.calibration_data = cv2.FileStorage(calibration_file, cv2.FILE_STORAGE_READ)
+        self.camera_matrix = self.calibration_data.getNode("camera_matrix").mat()
+        self.dist_coeffs = self.calibration_data.getNode("dist_coeffs").mat()
+
+    def capture_image(self, video_source=0):
+        cap = cv2.VideoCapture(video_source)
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            cv2.imshow('Capture', frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+        cap.release()
+        cv2.destroyAllWindows()
+        return frame
+
+    def undistort_image(self, image):
+        h, w = image.shape[:2]
+        new_camera_matrix, roi = cv2.getOptimalNewCameraMatrix(self.camera_matrix, self.dist_coeffs, (w,h), 1, (w,h))
+        undistorted_image = cv2.undistort(image, self.camera_matrix, self.dist_coeffs, None, new_camera_matrix)
+        return undistorted_image
+
+    def detect_markers(self, image):
+        aruco_dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_6X6_250)
+        aruco_params = cv2.aruco.DetectorParameters_create()
+        corners, ids, rejected_img_points = cv2.aruco.detectMarkers(image, aruco_dict, parameters=aruco_params)
+        return corners, ids
+
+    def estimate_pose(self, corners, marker_length):
+        rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(corners, marker_length, self.camera_matrix, self.dist_coeffs)
+        return rvecs, tvecs
+
+    def draw_pose(self, image, corners, rvecs, tvecs):
+        for i in range(len(corners)):
+            cv2.aruco.drawAxis(image, self.camera_matrix, self.dist_coeffs, rvecs[i], tvecs[i], 0.1)
+        return image
+
+    def measure_distance(self, tvec_1, tvec_2):
+        distance = np.linalg.norm(tvec_1 - tvec_2)
+        return distance
+
+if __name__ == "__main__":
+    # Example usage
+    calibration_file = "calibration_data.xml"
+    vum = VirtualUniformMeasurement(calibration_file)
+    image = vum.capture_image()
+    undistorted_image = vum.undistort_image(image)
+    
+    corners, ids = vum.detect_markers(undistorted_image)
+    rvecs, tvecs = vum.estimate_pose(corners, marker_length=0.05)
+    image_with_pose = vum.draw_pose(undistorted_image, corners, rvecs, tvecs)
+    
+    # Measure distance between two markers if detected
+    if len(tvecs) >= 2:
+        distance = vum.measure_distance(tvecs[0], tvecs[1])
+        print(f"Distance between markers: {distance:.2f} meters")
+
+    cv2.imshow('Pose Estimation', image_with_pose)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
